@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SchulQuiz - Live Interaktion</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --bg: #f8fafc;
+            --card: #ffffff;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            margin: 0;
+            padding: 20px;
+            color: #1e293b;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        .card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .nav-tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab-btn {
+            flex: 1; padding: 12px; border: none; background: #e2e8f0;
+            border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 15px;
+        }
+        .tab-btn.active { background: var(--primary); color: white; }
+        .view { display: none; }
+        .view.active { display: block; }
+        
+        input, select, button {
+            width: 100%; padding: 12px; margin: 8px 0;
+            border: 1px solid #cbd5e1; border-radius: 8px;
+            box-sizing: border-box; font-size: 16px;
+        }
+        button { background: var(--primary); color: white; border: none; font-weight: bold; cursor: pointer; }
+        button.success { background: var(--success); }
+        button.danger { background: var(--danger); }
+        
+        .question-display {
+            font-size: 26px; font-weight: bold; color: var(--primary);
+            text-align: center; margin: 20px 0;
+        }
+        .ranking-list { list-style: none; padding: 0; }
+        .ranking-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 16px; background: #f8fafc; border: 1px solid #e2e8f0;
+            border-radius: 8px; margin-bottom: 8px; font-size: 18px;
+        }
+        .status-correct { color: var(--success); font-weight: bold; }
+        .status-wrong { color: var(--danger); font-weight: bold; }
+        .result-box {
+            padding: 20px; border-radius: 8px; text-align: center;
+            font-size: 24px; font-weight: bold; margin-top: 20px;
+        }
+        .result-box.correct { background: #dcfce7; color: var(--success); }
+        .result-box.wrong { background: #fee2e2; color: var(--danger); }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="nav-tabs">
+        <button class="tab-btn active" onclick="switchView('tafel')">🖥️ Tafel-Ansicht</button>
+        <button class="tab-btn" onclick="switchView('schueler')">📱 Schüler-Simulationsmodus</button>
+        <button class="tab-btn" onclick="switchView('editor')">✏️️ Fragen-Editor</button>
+    </div>
+
+    <!-- TAFEL ANSICHT -->
+    <div id="view-tafel" class="view active">
+        <div class="card">
+            <h2>Tafel-Zentrale</h2>
+            <label>Frage aus dem Speicher auswählen:</label>
+            <select id="question-select" onchange="loadSelectedQuestion()">
+                <option value="">-- Keine Frage gespeichert --</option>
+            </select>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="startQuestion()" class="success">Frage freigeben</button>
+                <button onclick="resetQuiz()" class="danger">Runde beenden / Zurücksetzen</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div id="active-question-display" class="question-display">Warte auf Freigabe einer Frage...</div>
+            <h3>Eingegangene Schüler-Antworten</h3>
+            <ul id="tafel-ranking" class="ranking-list"></ul>
+        </div>
+    </div>
+
+    <!-- SCHÜLER ANSICHT -->
+    <div id="view-schueler" class="view">
+        <div class="card" id="student-login">
+            <h2>Am Quiz teilnehmen</h2>
+            <input type="text" id="student-name" placeholder="Dein Name..." autocomplete="off">
+            <button onclick="saveStudentName()">Bereit machen</button>
+        </div>
+
+        <div class="card" id="student-quiz" style="display:none;">
+            <p>Eingeloggt als: <strong id="display-student-name"></strong></p>
+            <div id="student-status-msg">Warte darauf, dass die Lehrkraft eine Frage startet...</div>
+
+            <div id="student-form" style="display:none;">
+                <div id="student-question-text" class="question-display"></div>
+                <input type="text" id="student-answer-input" placeholder="Deine Antwort eingeben..." autocomplete="off">
+                <button onclick="submitStudentAnswer()">Antwort absenden</button>
+            </div>
+
+            <div id="student-result"></div>
+        </div>
+    </div>
+
+    <!-- FRAGEN EDITOR -->
+    <div id="view-editor" class="view">
+        <div class="card">
+            <h2>Neue Frage erstellen</h2>
+            <input type="text" id="new-q-text" placeholder="Frage (z. B. Was ist die Wurzel aus 144?)">
+            <input type="text" id="new-q-ans" placeholder="Richtige Antwort (z. B. 12)">
+            <button onclick="saveNewQuestion()">Frage dauerhaft speichern</button>
+        </div>
+
+        <div class="card">
+            <h3>Gespeicherte Fragen</h3>
+            <ul id="editor-questions-list" class="ranking-list"></ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Lokale Zustandsspeicherung
+    let questions = JSON.parse(localStorage.getItem('app_questions') || '[]');
+    let currentQuizState = JSON.parse(localStorage.getItem('app_quiz_state') || '{"status":"waiting","answers":{}}');
+    let studentName = localStorage.getItem('app_student_name') || '';
+
+    function switchView(viewName) {
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        
+        document.getElementById('view-' + viewName).classList.add('active');
+        event.target.classList.add('active');
+        renderUI();
+    }
+
+    function saveNewQuestion() {
+        const qText = document.getElementById('new-q-text').value.trim();
+        const qAns = document.getElementById('new-q-ans').value.trim();
+        if (!qText || !qAns) return alert('Bitte Frage und Antwort ausfüllen!');
+        
+        questions.push({ question: qText, correct: qAns });
+        localStorage.setItem('app_questions', JSON.stringify(questions));
+        
+        document.getElementById('new-q-text').value = '';
+        document.getElementById('new-q-ans').value = '';
+        renderUI();
+    }
+
+    function deleteQuestion(idx) {
+        questions.splice(idx, 1);
+        localStorage.setItem('app_questions', JSON.stringify(questions));
+        renderUI();
+    }
+
+    function startQuestion() {
+        const idx = document.getElementById('question-select').value;
+        if (idx === "") return alert('Bitte wähle zuerst eine Frage aus!');
+        
+        currentQuizState = {
+            status: 'active',
+            question: questions[idx],
+            answers: {}
+        };
+        saveState();
+    }
+
+    function resetQuiz() {
+        currentQuizState = { status: 'waiting', answers: {} };
+        saveState();
+    }
+
+    function saveStudentName() {
+        const name = document.getElementById('student-name').value.trim();
+        if (!name) return alert('Bitte gib deinen Namen ein!');
+        studentName = name;
+        localStorage.setItem('app_student_name', name);
+        renderUI();
+    }
+
+    function submitStudentAnswer() {
+        const ans = document.getElementById('student-answer-input').value.trim();
+        if (!ans) return alert('Bitte gib eine Antwort ein!');
+
+        const isCorrect = ans.toLowerCase() === currentQuizState.question.correct.toLowerCase();
+        currentQuizState.answers[studentName] = { answer: ans, isCorrect: isCorrect };
+        saveState();
+    }
+
+    function saveState() {
+        localStorage.setItem('app_quiz_state', JSON.stringify(currentQuizState));
+        renderUI();
+    }
+
+    function renderUI() {
+        // Questions dropdown & editor
+        const select = document.getElementById('question-select');
+        const editorList = document.getElementById('editor-questions-list');
+        
+        select.innerHTML = '<option value="">-- Frage auswählen --</option>';
+        editorList.innerHTML = '';
+
+        questions.forEach((q, idx) => {
+            select.innerHTML += `<option value="${idx}">${q.question} (Antwort: ${q.correct})</option>`;
+            editorList.innerHTML += `
+                <li class="ranking-item">
+                    <span><strong>${q.question}</strong> <small>(${q.correct})</small></span>
+                    <button class="danger" style="width:auto; padding: 6px 12px;" onclick="deleteQuestion(${idx})">Löschen</button>
+                </li>`;
+        });
+
+        // Tafel Ansicht
+        const qDisplay = document.getElementById('active-question-display');
+        const ranking = document.getElementById('tafel-ranking');
+        
+        if (currentQuizState.status === 'active' && currentQuizState.question) {
+            qDisplay.innerText = "Aktuelle Frage: " + currentQuizState.question.question;
+        } else {
+            qDisplay.innerText = "Warte auf Freigabe einer Frage...";
+        }
+
+        ranking.innerHTML = '';
+        Object.entries(currentQuizState.answers || {}).forEach(([name, data]) => {
+            const statusClass = data.isCorrect ? 'status-correct' : 'status-wrong';
+            const statusIcon = data.isCorrect ? '✅ Richtig' : '❌ Falsch';
+            ranking.innerHTML += `
+                <li class="ranking-item">
+                    <span>${name}: <em>"${data.answer}"</em></span>
+                    <span class="${statusClass}">${statusIcon}</span>
+                </li>`;
+        });
+
+        // Schüler Ansicht
+        if (studentName) {
+            document.getElementById('student-login').style.display = 'none';
+            document.getElementById('student-quiz').style.display = 'block';
+            document.getElementById('display-student-name').innerText = studentName;
+
+            const statusMsg = document.getElementById('student-status-msg');
+            const form = document.getElementById('student-form');
+            const qText = document.getElementById('student-question-text');
+            const result = document.getElementById('student-result');
+
+            if (currentQuizState.status === 'active') {
+                const hasAnswered = currentQuizState.answers[studentName];
+                if (hasAnswered) {
+                    form.style.display = 'none';
+                    statusMsg.style.display = 'none';
+                    if (hasAnswered.isCorrect) {
+                        result.innerHTML = '<div class="result-box correct">🎉 Richtig beantwortet!</div>';
+                    } else {
+                        result.innerHTML = '<div class="result-box wrong">❌ Leider falsch!</div>';
+                    }
+                } else {
+                    result.innerHTML = '';
+                    statusMsg.style.display = 'none';
+                    form.style.display = 'block';
+                    qText.innerText = currentQuizState.question.question;
+                }
+            } else {
+                form.style.display = 'none';
+                statusMsg.style.display = 'block';
+                statusMsg.innerText = 'Warte darauf, dass die Lehrkraft eine Frage startet...';
+                result.innerHTML = '';
+            }
+        }
+    }
+
+    // Erster Start
+    renderUI();
+</script>
+
+</body>
+</html>
