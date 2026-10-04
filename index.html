@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SchulQuiz - Live Interaktion</title>
+    <!-- Supabase JS Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --primary: #4f46e5;
@@ -63,6 +65,10 @@
         }
         .result-box.correct { background: #dcfce7; color: var(--success); }
         .result-box.wrong { background: #fee2e2; color: var(--danger); }
+        .status-badge {
+            font-size: 12px; padding: 4px 8px; border-radius: 4px;
+            background: #e2e8f0; float: right; font-weight: normal;
+        }
     </style>
 </head>
 <body>
@@ -70,27 +76,27 @@
 <div class="container">
     <div class="nav-tabs">
         <button class="tab-btn active" onclick="switchView('tafel')">🖥️ Tafel-Ansicht</button>
-        <button class="tab-btn" onclick="switchView('schueler')">📱 Schüler-Simulationsmodus</button>
-        <button class="tab-btn" onclick="switchView('editor')">✏️️ Fragen-Editor</button>
+        <button class="tab-btn" onclick="switchView('schueler')">📱 Schüler-Ansicht</button>
+        <button class="tab-btn" onclick="switchView('editor')">✏️ Fragen-Editor</button>
     </div>
 
     <!-- TAFEL ANSICHT -->
     <div id="view-tafel" class="view active">
         <div class="card">
-            <h2>Tafel-Zentrale</h2>
+            <h2>Tafel-Zentrale <span id="sync-status" class="status-badge">Verbinde Echtzeit...</span></h2>
             <label>Frage aus dem Speicher auswählen:</label>
-            <select id="question-select" onchange="loadSelectedQuestion()">
+            <select id="question-select">
                 <option value="">-- Keine Frage gespeichert --</option>
             </select>
             <div style="display: flex; gap: 10px;">
                 <button onclick="startQuestion()" class="success">Frage freigeben</button>
-                <button onclick="resetQuiz()" class="danger">Runde beenden / Zurücksetzen</button>
+                <button onclick="resetQuiz()" class="danger">Runde beenden</button>
             </div>
         </div>
 
         <div class="card">
             <div id="active-question-display" class="question-display">Warte auf Freigabe einer Frage...</div>
-            <h3>Eingegangene Schüler-Antworten</h3>
+            <h3>Eingegangene Schüler-Antworten (Live)</h3>
             <ul id="tafel-ranking" class="ranking-list"></ul>
         </div>
     </div>
@@ -121,8 +127,8 @@
     <div id="view-editor" class="view">
         <div class="card">
             <h2>Neue Frage erstellen</h2>
-            <input type="text" id="new-q-text" placeholder="Frage (z. B. Was ist die Wurzel aus 144?)">
-            <input type="text" id="new-q-ans" placeholder="Richtige Antwort (z. B. 12)">
+            <input type="text" id="new-q-text" placeholder="Frage (z. B. Was ist die Hauptstammform von 'sein'?)">
+            <input type="text" id="new-q-ans" placeholder="Richtige Antwort (z. B. war)">
             <button onclick="saveNewQuestion()">Frage dauerhaft speichern</button>
         </div>
 
@@ -134,10 +140,42 @@
 </div>
 
 <script>
-    // Lokale Zustandsspeicherung
+    // --- SUPABASE KONFIGURATION (Hier deine Daten eintragen) ---
+    const SUPABASE_URL = https://mqtcwiiawmuxrpkjfrfc.supabase.co/rest/v1/;
+    const SUPABASE_KEY = sb_publishable_eY5NBW8EJHuyO2Ic5S3HBQ_tSwErhp-;
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // Lokaler Speicher & Status
     let questions = JSON.parse(localStorage.getItem('app_questions') || '[]');
-    let currentQuizState = JSON.parse(localStorage.getItem('app_quiz_state') || '{"status":"waiting","answers":{}}');
+    let currentQuizState = { status: 'waiting', answers: {} };
     let studentName = localStorage.getItem('app_student_name') || '';
+
+    // Broadcast Channel für Live-Echtzeitübertragung
+    const channel = supabaseClient.channel('quiz-room', {
+        config: { broadcast: { self: true } }
+    });
+
+    channel
+        .on('broadcast', { event: 'quiz-state' }, ({ payload }) => {
+            currentQuizState = payload;
+            renderUI();
+        })
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                document.getElementById('sync-status').innerText = '🟢 Live Verbunden';
+                document.getElementById('sync-status').style.background = '#dcfce7';
+                document.getElementById('sync-status').style.color = '#16a34a';
+            }
+        });
+
+    function broadcastState() {
+        channel.send({
+            type: 'broadcast',
+            event: 'quiz-state',
+            payload: currentQuizState
+        });
+        renderUI();
+    }
 
     function switchView(viewName) {
         document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -176,12 +214,12 @@
             question: questions[idx],
             answers: {}
         };
-        saveState();
+        broadcastState();
     }
 
     function resetQuiz() {
         currentQuizState = { status: 'waiting', answers: {} };
-        saveState();
+        broadcastState();
     }
 
     function saveStudentName() {
@@ -197,17 +235,15 @@
         if (!ans) return alert('Bitte gib eine Antwort ein!');
 
         const isCorrect = ans.toLowerCase() === currentQuizState.question.correct.toLowerCase();
+        
+        if (!currentQuizState.answers) currentQuizState.answers = {};
         currentQuizState.answers[studentName] = { answer: ans, isCorrect: isCorrect };
-        saveState();
-    }
-
-    function saveState() {
-        localStorage.setItem('app_quiz_state', JSON.stringify(currentQuizState));
-        renderUI();
+        
+        broadcastState();
     }
 
     function renderUI() {
-        // Questions dropdown & editor
+        // Dropdown & Editor Liste
         const select = document.getElementById('question-select');
         const editorList = document.getElementById('editor-questions-list');
         
@@ -256,7 +292,7 @@
             const result = document.getElementById('student-result');
 
             if (currentQuizState.status === 'active') {
-                const hasAnswered = currentQuizState.answers[studentName];
+                const hasAnswered = currentQuizState.answers && currentQuizState.answers[studentName];
                 if (hasAnswered) {
                     form.style.display = 'none';
                     statusMsg.style.display = 'none';
@@ -280,7 +316,6 @@
         }
     }
 
-    // Erster Start
     renderUI();
 </script>
 
